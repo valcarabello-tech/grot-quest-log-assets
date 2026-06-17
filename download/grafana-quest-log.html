@@ -897,6 +897,8 @@ function save() {
   lsSet('gql-all-bonus',      allBonus);
   lsSet('gql-total-quests',   totalQuestsCompleted);
   backupToNative();
+  ensurePlayerId();
+  pushMetricsToNative();
 }
 
 // ── DYNAMIC QUESTS ────────────────────────────────────────
@@ -1819,6 +1821,7 @@ let settingsTone = null;
 
 function openSettings() {
   { const st = document.getElementById('sound-toggle'); if (st) st.checked = lsGet('gql-sound') !== 'off'; }
+  { const lt = document.getElementById('leaderboard-toggle'); if (lt) lt.checked = lsGet('gql-leaderboard-optin') === '1'; }
   { const it = document.getElementById('intro-toggle'); if (it) it.checked = lsGet('gql-intro') !== 'off'; }
   const overlay = document.getElementById('settings-overlay');
   overlay.style.display = 'flex';
@@ -2665,6 +2668,44 @@ function backupToNative() {
   } catch(e) {}
 }
 
+// ── TEAM LEADERBOARD PUSH (opt-in) ───────────────────────
+// Stable per-install id so renames never fork your history on the dashboard.
+function ensurePlayerId() {
+  try {
+    let pid = lsGet('gql-player-id');
+    if (!pid) {
+      pid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+            : 'p-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+      lsSet('gql-player-id', pid);
+    }
+    return pid;
+  } catch(e) { return null; }
+}
+// Debounced push to the Swift bridge (which holds the write token).
+let _pushTimer = null;
+function pushMetricsToNative() {
+  try {
+    if (lsGet('gql-leaderboard-optin') !== '1') return;            // opt-in only
+    if (!window.webkit?.messageHandlers?.pushMetrics) return;       // native bridge only
+    clearTimeout(_pushTimer);
+    _pushTimer = setTimeout(function () {
+      try {
+        const lv = getLevelData(totalXp).current.level;
+        const payload = {
+          pid:      ensurePlayerId(),
+          name:     lsGet('gql-player-name') || 'Anonymous Grot',
+          level:    lv,
+          totalXp:  totalXp,
+          weeklyXp: weeklyXp,
+          quests:   totalQuestsCompleted,
+          grotTier: Math.min(41, Math.floor((lv - 1) * 41 / 99))
+        };
+        window.webkit.messageHandlers.pushMetrics.postMessage(JSON.stringify(payload));
+      } catch(e) {}
+    }, 4000);
+  } catch(e) {}
+}
+
 // ── RELOAD FROM DISK (↺ button / ⌘R) ─────────────────────
 function reloadFromDisk() {
   // In the native app, Swift listens for this message and re-reads the HTML file
@@ -2721,6 +2762,10 @@ function pickPhrase(phrase) {
   }
 }
 
+// ── boot: ensure stable player id + initial leaderboard push (if opted in) ──
+ensurePlayerId();
+setTimeout(function () { try { pushMetricsToNative(); } catch (e) {} }, 1500);
+
 </script>
 
 <div id="settings-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:500;align-items:center;justify-content:center;">
@@ -2758,6 +2803,10 @@ function pickPhrase(phrase) {
     <label style="display:flex;align-items:center;gap:10px;font-size:.85rem;color:#fff;margin-bottom:18px;cursor:pointer;">
       <input type="checkbox" id="intro-toggle" onchange="lsSet('gql-intro', this.checked ? 'on' : 'off');" style="width:17px;height:17px;accent-color:#F46800;cursor:pointer;flex-shrink:0;">
       <span>Intro animation <span style="color:var(--text-muted);font-size:.78rem;">— title sequence when the app opens</span></span>
+    </label>
+    <label style="display:flex;align-items:center;gap:10px;font-size:.85rem;color:#fff;margin-bottom:18px;cursor:pointer;">
+      <input type="checkbox" id="leaderboard-toggle" onchange="lsSet('gql-leaderboard-optin', this.checked ? '1' : '0'); ensurePlayerId(); if(this.checked){ pushMetricsToNative(); }" style="width:17px;height:17px;accent-color:#F46800;cursor:pointer;flex-shrink:0;">
+      <span>Appear on the team leaderboard <span style="color:var(--text-muted);font-size:.78rem;">— shares your level, XP, quests &amp; Grot tier with the team Grafana dashboard</span></span>
     </label>
     <div style="display:flex;gap:10px;justify-content:flex-end;">
       <button onclick="resetApp()" style="background:rgba(255,60,60,.15);border:1px solid rgba(255,60,60,.3);color:#ff6b6b;padding:9px 20px;border-radius:8px;cursor:pointer;margin-right:auto;">Reset App</button>
