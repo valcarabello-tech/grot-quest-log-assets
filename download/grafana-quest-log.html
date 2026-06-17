@@ -2681,12 +2681,14 @@ function ensurePlayerId() {
     return pid;
   } catch(e) { return null; }
 }
-// Debounced push to the Swift bridge (which holds the write token).
+// Debounced leaderboard push. Mac app → native bridge (Swift forwards to the
+// proxy). Browser (Windows/Linux, or the raw HTML) → fetch the proxy directly.
+// Proxy URL + spam-gate key are public-safe (the key only gates leaderboard spam).
 let _pushTimer = null;
+var GQL_PROXY_URL = "https://script.google.com/macros/s/AKfycbwBdUFz4TYRc9kuLn6TzAlqTFXS3Bt_1m-8Z6nwKzLHjpyxulyKdTPn4_QGwiGkjMe9Pg/exec?k=qlk_okHgohBmpYtTJzeis9t8hhKncqPmRcf4";
 function pushMetricsToNative() {
   try {
     if (lsGet('gql-leaderboard-optin') !== '1') return;            // opt-in only
-    if (!window.webkit?.messageHandlers?.pushMetrics) return;       // native bridge only
     clearTimeout(_pushTimer);
     _pushTimer = setTimeout(function () {
       try {
@@ -2700,7 +2702,13 @@ function pushMetricsToNative() {
           quests:   totalQuestsCompleted,
           grotTier: Math.min(41, Math.floor((lv - 1) * 41 / 99))
         };
-        window.webkit.messageHandlers.pushMetrics.postMessage(JSON.stringify(payload));
+        var body = JSON.stringify(payload);
+        if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.pushMetrics) {
+          window.webkit.messageHandlers.pushMetrics.postMessage(body);   // Mac native app → Swift → proxy
+        } else if (window.fetch) {                                        // browser (Win/Linux/Mac browser) → proxy direct
+          fetch(GQL_PROXY_URL, { method:'POST', mode:'no-cors',
+            headers:{'Content-Type':'text/plain;charset=utf-8'}, body: body }).catch(function(){});
+        }
       } catch(e) {}
     }, 4000);
   } catch(e) {}
